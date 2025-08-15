@@ -59,20 +59,16 @@ export const getNext = async (count = 1) => {
 export const markAsProcessed = async (queue: queue, payment: PaymentJob) => {
     const ts = new Date(payment.data.requestedAt).getTime();
 
-    try {
-        await redis
-            .pipeline()
-            .xack("payments_stream", "payments_group", payment.id)
-            .hset(
-                `payments:amounts`,
-                payment.data.correlationId,
-                payment.data.amount
-            )
-            .zadd(`payment:index:${queue}`, ts, payment.data.correlationId)
-            .exec();
-    } catch (err) {
-        console.error(err);
-    }
+    await redis
+        .pipeline()
+        .xack("payments_stream", "payments_group", payment.id)
+        .hset(
+            `payments:amounts`,
+            payment.data.correlationId,
+            payment.data.amount
+        )
+        .zadd(`payment:index:${queue}`, ts, payment.data.correlationId)
+        .exec();
 };
 
 export const getSummary = async (

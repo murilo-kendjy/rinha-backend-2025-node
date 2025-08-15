@@ -74,13 +74,27 @@ const sendPayment = async (payment: PaymentJob, type: 0 | 1) => {
 
 const process = async (): Promise<any> => {
     const sem = semaphore(CONCURRENCY);
+    let timeout = true;
     while (true) {
-        const items = await getNext(QUEUE_SIZE);
+        const type = await getPaymentType();
+
+        if (timeout && type === 1) {
+            timeout = false;
+            await new Promise((r) => setTimeout(r, 500));
+            continue;
+        } else {
+            timeout = true;
+        }
+
+        const multiplier = type === 0 ? 2 : 0.5;
+
+        const items = await getNext(QUEUE_SIZE * multiplier);
         if (!items || !items.length) {
             await new Promise((r) => setTimeout(r, 15));
             continue;
         }
-        const type = await getPaymentType();
+
+        sem.setMax(CONCURRENCY * multiplier);
         for (const item of items) {
             const release = await sem.acquire();
             sendPayment(item, type).finally(() => release());
@@ -105,9 +119,6 @@ const chooseType = async () => {
         healthCheck(0),
         healthCheck(1),
     ]);
-
-    console.log(serverDefault, serverFallBack);
-
     if (!serverDefault || serverDefault.failing) {
         setFallback();
         return;

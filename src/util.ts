@@ -1,7 +1,7 @@
 let current = 0;
 let queue: Array<(release: () => void) => void> = [];
 
-export const semaphore = function (max: number) {
+export const semaphore = (max: number) => {
     const next = () => {
         if (queue.length > 0 && current < max) {
             current++;
@@ -27,5 +27,5 @@ export const semaphore = function (max: number) {
         });
     };
 
-    return { acquire };
+    return { acquire, setMax: (m: number) => (max = m) };
 };
