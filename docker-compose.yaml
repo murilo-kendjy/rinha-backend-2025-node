@@ -1,6 +1,6 @@
 x-service-templates:
   api: &api
-    image: mkonita/rinha2025-node:latest
+    image: mkonita/rinha2025-node:1.0.1
     networks:
       - internal
       - payment-processor
