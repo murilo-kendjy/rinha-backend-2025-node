@@ -19,6 +19,8 @@ This is a proxy api made in NodeJs (TS) using Keydb and undici. This project is 
 | PORT                 | 9999                  | API port                                    |
 | QUEUE_SIZE           | 200                   | Number of items fetched from keydb per call |
 | CONCURRENCY          | 25                    | Number of concurrent http requests          |
+| CONNECTIONS          | 10                    | undici connections property                 |
+| PIPELINING           | 10                    | undici pipelining property                  |
 | PAYMENT_URL_DEFAULT  | http://localhost:8001 | Default payment provider url                |
 | PAYMENT_URL_FALLBACK | http://localhost:8002 | Fallback payment provider url               |
 | KEYDB_HOST           | localhost             | Keydb/Redis host                            |
