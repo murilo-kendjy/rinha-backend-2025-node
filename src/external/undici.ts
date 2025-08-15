@@ -1,15 +1,20 @@
 import { Pool } from "undici";
-import { PAYMENT_URL_DEFAULT, PAYMENT_URL_FALLBACK } from "../constants.js";
+import {
+    CONNECTIONS,
+    PAYMENT_URL_DEFAULT,
+    PAYMENT_URL_FALLBACK,
+    PIPELINING,
+} from "../constants.js";
 
 export const poolDefault = new Pool(PAYMENT_URL_DEFAULT, {
-    connections: 10,
-    pipelining: 10,
+    connections: CONNECTIONS,
+    pipelining: PIPELINING,
     keepAliveTimeout: 60000,
 });
 
 export const poolFallback = new Pool(PAYMENT_URL_FALLBACK, {
-    connections: 10,
-    pipelining: 10,
+    connections: CONNECTIONS,
+    pipelining: PIPELINING,
     keepAliveTimeout: 60000,
 });
 

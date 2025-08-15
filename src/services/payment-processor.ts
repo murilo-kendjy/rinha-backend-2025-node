@@ -29,15 +29,9 @@ const addBalance = async (payment: PaymentJob, type: number) => {
 
 const change = async () => {
     const lockKey = "switch-lock";
-    const lockTTL = 200;
+    const lockTTL = 250;
 
-    const acquired = await redis.set(
-        lockKey,
-        "locked",
-        "NX" as any,
-        "EX" as any,
-        lockTTL as any
-    );
+    const acquired = await redis.set(lockKey, "locked", "PX", lockTTL, "NX");
 
     if (acquired) {
         getPaymentType().then((res) => {
@@ -46,8 +40,6 @@ const change = async () => {
             } else {
                 setDefault();
             }
-
-            redis.pexpire(lockKey, lockTTL);
         });
     }
 };
