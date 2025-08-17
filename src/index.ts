@@ -20,7 +20,7 @@ async function main() {
                         "payments_stream",
                         "*",
                         "payload",
-                        Buffer.concat(chunks).toString()
+                        Buffer.concat(chunks)
                     );
 
                     res.writeHead(201);
@@ -35,10 +35,9 @@ async function main() {
             if (rawQuery) {
                 for (const pair of rawQuery.split("&")) {
                     const [key, value] = pair.split("=");
-                    query[key] = decodeURIComponent(value || "");
+                    query[key] = value;
                 }
             }
-
             getBalance(
                 new Date(query.from || new Date("2025-01-01")).getTime(),
                 new Date(query.to || new Date("2026-01-01")).getTime()

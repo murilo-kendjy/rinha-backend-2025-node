@@ -9,23 +9,26 @@ import {
 export const poolDefault = new Pool(PAYMENT_URL_DEFAULT, {
     connections: CONNECTIONS,
     pipelining: PIPELINING,
-    keepAliveTimeout: 60000,
+    keepAliveTimeout: 120000,
 });
 
 export const poolFallback = new Pool(PAYMENT_URL_FALLBACK, {
     connections: CONNECTIONS,
     pipelining: PIPELINING,
-    keepAliveTimeout: 60000,
+    keepAliveTimeout: 120000,
 });
+
+const h = {
+    "Content-Type": "application/json",
+};
 
 export const makeRequest = async (type: 0 | 1, path: string, body?: string) => {
     const opts: any = {
         method: body ? "POST" : "GET",
-        headers: {},
+        headers: h,
     };
 
     if (body) {
-        opts.headers["content-type"] = "application/json";
         opts.body = body;
     }
 

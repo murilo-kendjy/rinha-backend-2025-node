@@ -29,3 +29,15 @@ export const semaphore = (max: number) => {
 
     return { acquire, setMax: (m: number) => (max = m) };
 };
+
+export const calcFactor = (type: 0 | 1, time: number) => {
+    if (type === 0 && time === 0) {
+        return 8;
+    } else if (type === 0 && time <= 50) {
+        return 5;
+    } else if (type === 0) {
+        return 2;
+    } else {
+        return 0.5;
+    }
+};

@@ -24,6 +24,10 @@ export const getPaymentType = async (): Promise<0 | 1> => {
     return parseInt((await redis.get("type")) || "0") as 0 | 1;
 };
 
+export const getTime = async (): Promise<number> => {
+    return parseInt((await redis.get("time")) || "0") as number;
+};
+
 export const setService = async (type: 0 | 1) => {
     await redis.set("type", type);
 };
@@ -54,21 +58,6 @@ export const getNext = async (count = 1) => {
     );
 
     return items as PaymentJob[];
-};
-
-export const markAsProcessed = async (queue: queue, payment: PaymentJob) => {
-    const ts = new Date(payment.data.requestedAt).getTime();
-
-    await redis
-        .pipeline()
-        .xack("payments_stream", "payments_group", payment.id)
-        .hset(
-            `payments:amounts`,
-            payment.data.correlationId,
-            payment.data.amount
-        )
-        .zadd(`payment:index:${queue}`, ts, payment.data.correlationId)
-        .exec();
 };
 
 export const getSummary = async (

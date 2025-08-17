@@ -1,19 +1,9 @@
-import { CONCURRENCY, QUEUE_SIZE } from "../constants.js";
-import {
-    getNext,
-    getPaymentType,
-    getSummary,
-    markAsProcessed,
-    redis,
-    setService,
-} from "../external/keydb.js";
+import { Worker } from "node:worker_threads";
+import { getSummary, redis, setService } from "../external/keydb.js";
 import { makeRequest } from "../external/undici.js";
-import {
-    PaymentHealthCheck,
-    PaymentJob,
-    PaymentSummaryResponse,
-} from "../types.js";
-import { semaphore } from "../util.js";
+import { PaymentHealthCheck, PaymentSummaryResponse } from "../types.js";
+
+new Worker(new URL("../workers/process.js", import.meta.url));
 
 const setDefault = () => {
     setService(0);
@@ -21,77 +11,6 @@ const setDefault = () => {
 
 const setFallback = () => {
     setService(1);
-};
-
-const addBalance = async (payment: PaymentJob, type: number) => {
-    markAsProcessed(type === 0 ? "default" : "fallback", payment);
-};
-
-const change = async () => {
-    const lockKey = "switch-lock";
-    const lockTTL = 250;
-
-    const acquired = await redis.set(lockKey, "locked", "PX", lockTTL, "NX");
-
-    if (acquired) {
-        getPaymentType().then((res) => {
-            if (res === 0) {
-                setFallback();
-            } else {
-                setDefault();
-            }
-        });
-    }
-};
-
-const sendPayment = async (payment: PaymentJob, type: 0 | 1) => {
-    payment.data.requestedAt = new Date().toISOString();
-    const res = await makeRequest(
-        type,
-        "/payments",
-        JSON.stringify(payment.data)
-    );
-
-    if (res.statusCode >= 400) {
-        if (res.statusCode >= 500) {
-            change();
-        }
-
-        await sendPayment(payment, type === 0 ? 1 : 0);
-        return;
-    }
-
-    addBalance(payment, type);
-};
-
-const process = async (): Promise<any> => {
-    const sem = semaphore(CONCURRENCY);
-    let timeout = true;
-    while (true) {
-        const type = await getPaymentType();
-
-        if (timeout && type === 1) {
-            timeout = false;
-            await new Promise((r) => setTimeout(r, 500));
-            continue;
-        } else {
-            timeout = true;
-        }
-
-        const multiplier = type === 0 ? 2 : 0.5;
-
-        const items = await getNext(QUEUE_SIZE * multiplier);
-        if (!items || !items.length) {
-            await new Promise((r) => setTimeout(r, 15));
-            continue;
-        }
-
-        sem.setMax(CONCURRENCY * multiplier);
-        for (const item of items) {
-            const release = await sem.acquire();
-            sendPayment(item, type).finally(() => release());
-        }
-    }
 };
 
 const healthCheck = async (type: 0 | 1) => {
@@ -111,12 +30,15 @@ const chooseType = async () => {
         healthCheck(0),
         healthCheck(1),
     ]);
+
     if (!serverDefault || serverDefault.failing) {
+        redis.set("time", serverFallBack?.minResponseTime || 0);
         setFallback();
         return;
     }
 
     if (!serverFallBack || serverFallBack.failing) {
+        redis.set("time", serverDefault?.minResponseTime || 0);
         setDefault();
         return;
     }
@@ -125,8 +47,10 @@ const chooseType = async () => {
         serverDefault.minResponseTime < 100 &&
         serverDefault.minResponseTime <= serverFallBack.minResponseTime * 1.4
     ) {
+        redis.set("time", serverDefault?.minResponseTime || 0);
         setDefault();
     } else {
+        redis.set("time", serverFallBack?.minResponseTime || 0);
         setFallback();
     }
 };
@@ -166,5 +90,4 @@ export const getBalance = async (
     };
 };
 
-process();
 startWorker();
