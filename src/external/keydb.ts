@@ -1,14 +1,19 @@
 import Redis from "ioredis";
 import { KEYDB_HOST, KEYDB_PORT } from "../constants.js";
-import { PaymentJob, queue } from "../types.js";
+import { PaymentJob, PaymentSummaryResponse, queue } from "../types.js";
+import { pack } from "../util.js";
 
-export const redis = new Redis({
+const redis = new Redis({
     host: KEYDB_HOST,
     port: KEYDB_PORT,
 });
 const redisStream = redis.duplicate();
 
-export const createGroup = async () => {
+export const setLockKey = async (lockKey: string, lockTTL: number) => {
+    return await redis.set(lockKey, "locked", "PX", lockTTL, "NX");
+};
+
+const createGroup = async () => {
     try {
         await redis.xgroup(
             "CREATE",
@@ -20,16 +25,25 @@ export const createGroup = async () => {
     } catch {}
 };
 
-export const getPaymentType = async (): Promise<0 | 1> => {
-    return parseInt((await redis.get("type")) || "0") as 0 | 1;
+createGroup();
+
+export const setHealth = (d: boolean, f: boolean, dMs: number, fMs: number) => {
+    redis.set("health", pack(d, f, dMs, fMs));
 };
 
-export const getTime = async (): Promise<number> => {
-    return parseInt((await redis.get("time")) || "0") as number;
+setHealth(true, true, 0, 0);
+
+export const getHealth = async () => {
+    return await redis.getBuffer("health");
 };
 
-export const setService = async (type: 0 | 1) => {
-    await redis.set("type", type);
+export const flushall = async () => {
+    await redis.flushall();
+    await createGroup();
+};
+
+export const add = (chunks: Buffer[]) => {
+    redis.xadd("payments_stream", "*", "payload", Buffer.concat(chunks));
 };
 
 export const getNext = async (count = 1) => {
@@ -60,11 +74,7 @@ export const getNext = async (count = 1) => {
     return items as PaymentJob[];
 };
 
-export const getSummary = async (
-    queue: queue,
-    startTs: number,
-    endTs: number
-) => {
+const getSummary = async (queue: queue, startTs: number, endTs: number) => {
     const ids = await redis.zrangebyscore(
         `payment:index:${queue}`,
         startTs,
@@ -85,4 +95,33 @@ export const getSummary = async (
         totalRequests: ids.length,
         totalAmount,
     };
+};
+
+export const getBalance = async (
+    startTs: number,
+    endTs: number
+): Promise<PaymentSummaryResponse> => {
+    const [d, f] = await Promise.all([
+        getSummary("default", startTs, endTs),
+        getSummary("fallback", startTs, endTs),
+    ]);
+    return {
+        default: d,
+        fallback: f,
+    };
+};
+
+export const markAsProcessed = async (queue: queue, payment: PaymentJob) => {
+    const ts = new Date(payment.data.requestedAt).getTime();
+
+    await redis
+        .pipeline()
+        .xack("payments_stream", "payments_group", payment.id)
+        .hset(
+            `payments:amounts`,
+            payment.data.correlationId,
+            payment.data.amount
+        )
+        .zadd(`payment:index:${queue}`, ts, payment.data.correlationId)
+        .exec();
 };

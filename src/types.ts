@@ -38,3 +38,10 @@ export interface PaymentSummaryResponse {
     default: PaymentSummaryItem;
     fallback: PaymentSummaryItem;
 }
+
+export interface Health {
+    d: boolean;
+    f: boolean;
+    dMs: number;
+    fMs: number;
+}

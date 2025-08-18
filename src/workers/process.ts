@@ -1,116 +1,176 @@
 import { parentPort } from "worker_threads";
-import { CONCURRENCY, QUEUE_SIZE } from "../constants.js";
-import {
-    getNext,
-    getPaymentType,
-    getTime,
-    redis,
-    setService,
-} from "../external/keydb.js";
+import { CONCURRENCY, CONNECTIONS, QUEUE_SIZE } from "../constants.js";
+import { getHealth, getNext, markAsProcessed } from "../external/keydb.js";
 import { makeRequest } from "../external/undici.js";
-import { PaymentJob, queue } from "../types.js";
-import { calcFactor, semaphore } from "../util.js";
+import { PaymentJob } from "../types.js";
+import { calcFactor, semaphore, unpack } from "../util.js";
 
-const setDefault = () => {
-    setService(0);
+interface CircuitBreaker {
+    open: boolean;
+    failCount: number;
+    lastFail: number;
+}
+
+const dCircuit: CircuitBreaker = { open: false, failCount: 0, lastFail: 0 };
+const fCircuit: CircuitBreaker = { open: false, failCount: 0, lastFail: 0 };
+const retryQueue: PaymentJob[] = [];
+
+const circuitFail = (c: CircuitBreaker) => {
+    c.open = true;
+    c.lastFail = Date.now();
+    c.failCount++;
 };
 
-const setFallback = () => {
-    setService(1);
-};
-
-const markAsProcessed = async (queue: queue, payment: PaymentJob) => {
-    const ts = new Date(payment.data.requestedAt).getTime();
-
-    await redis
-        .pipeline()
-        .xack("payments_stream", "payments_group", payment.id)
-        .hset(
-            `payments:amounts`,
-            payment.data.correlationId,
-            payment.data.amount
-        )
-        .zadd(`payment:index:${queue}`, ts, payment.data.correlationId)
-        .exec();
+const resetCircuit = (c: CircuitBreaker) => {
+    c.failCount = 0;
+    c.lastFail = 0;
+    c.open = false;
 };
 
 const addBalance = async (payment: PaymentJob, type: number) => {
     await markAsProcessed(type === 0 ? "default" : "fallback", payment);
 };
 
-const change = async () => {
-    const lockKey = "switch-lock";
-    const lockTTL = 250;
+const sendPayment = async (payment: PaymentJob, type: 0 | 1) => {
+    try {
+        payment.data.requestedAt = new Date().toISOString();
+        const res = await makeRequest(
+            type,
+            "/payments",
+            JSON.stringify(payment.data)
+        );
 
-    const acquired = await redis.set(lockKey, "locked", "PX", lockTTL, "NX");
+        if (res.statusCode >= 500) {
+            circuitFail(type === 0 ? dCircuit : fCircuit);
 
-    if (acquired) {
-        getPaymentType().then((res) => {
-            if (res === 0) {
-                setFallback();
-            } else {
-                setDefault();
-            }
-        });
+            throw new Error("PSP failure");
+        }
+
+        resetCircuit(type === 0 ? dCircuit : fCircuit);
+
+        await addBalance(payment, type);
+    } catch {
+        retryQueue.push(payment);
     }
 };
 
-const sendPayment = async (payment: PaymentJob, type: 0 | 1) => {
-    payment.data.requestedAt = new Date().toISOString();
-    const res = await makeRequest(
-        type,
-        "/payments",
-        JSON.stringify(payment.data)
-    );
-
-    if (res.statusCode >= 400) {
-        if (res.statusCode >= 500) {
-            change();
-        }
-
-        await sendPayment(payment, type === 0 ? 1 : 0);
-        return;
+const choosePayment = () => {
+    if (!dCircuit.open) {
+        return 0;
     }
 
-    await addBalance(payment, type);
+    if (Date.now() - (dCircuit.lastFail || Date.now()) > 800) {
+        resetCircuit(dCircuit);
+        return null;
+    }
+
+    if (dCircuit.open && fCircuit.open) {
+        return null;
+    }
+
+    if (dCircuit.failCount > 20) {
+        resetCircuit(dCircuit);
+        return 1;
+    }
+
+    return null;
+};
+
+const reprocess = async (): Promise<any> => {
+    const sem = semaphore(125);
+    while (true) {
+        if (!retryQueue.length) {
+            await new Promise((r) => setTimeout(r, 20));
+            continue;
+        }
+
+        const job = retryQueue.shift()!;
+        const type = choosePayment();
+
+        if (type === null) {
+            retryQueue.push(job);
+            await new Promise((r) => setTimeout(r, 50));
+            continue;
+        }
+
+        const release = await sem.acquire();
+        sendPayment(job, type).finally(() => release());
+    }
 };
 
 const process = async (): Promise<any> => {
     const sem = semaphore(CONCURRENCY);
-    let timeout = 0;
+    let forceFetch = 0;
     while (true) {
-        const type = await getPaymentType();
-        const time = await getTime();
-
-        if (timeout <= 10 && type === 1) {
-            timeout++;
-            await new Promise((r) => setTimeout(r, 500));
+        const buf = await getHealth();
+        if (!buf) {
+            await new Promise((r) => setTimeout(r, 50));
             continue;
-        } else {
-            timeout = 0;
         }
 
-        const factor = calcFactor(type, time);
+        const health = unpack(buf);
+        if (!health.d) {
+            await new Promise((r) => setTimeout(r, 50));
+            continue;
+        }
 
-        const items = await getNext(
-            QUEUE_SIZE * factor > 500 ? 500 : QUEUE_SIZE * factor
-        );
+        if (health.d) {
+            resetCircuit(dCircuit);
+        }
+
+        if (dCircuit.open && forceFetch < 50) {
+            forceFetch++;
+            await new Promise((r) => setTimeout(r, 50));
+            continue;
+        }
+
+        forceFetch = 0;
+
+        const factor = calcFactor(health);
+        if (factor.type === null) {
+            continue;
+        }
+
+        const batchSize = Math.min(QUEUE_SIZE * factor.factor, 500);
+        const items = await getNext(batchSize);
         if (!items || !items.length) {
             await new Promise((r) => setTimeout(r, 15));
             continue;
         }
 
-        sem.setMax(CONCURRENCY * factor);
+        sem.setMax(CONCURRENCY * factor.factor);
         for (const item of items) {
+            const useFallback = factor.type === 0 && dCircuit.open;
+
+            if (useFallback) {
+                retryQueue.push(item);
+                continue;
+            }
+
             const release = await sem.acquire();
-            sendPayment(item, type).finally(() => release());
+            sendPayment(item, 0).finally(() => release());
         }
     }
 };
 
+const warmup = async () => {
+    const promises = [
+        ...Array.from({ length: CONNECTIONS }, () =>
+            makeRequest(0, "/payments/service-health").catch(() => {})
+        ),
+        ...Array.from({ length: CONNECTIONS }, () =>
+            makeRequest(1, "/payments/service-health").catch(() => {})
+        ),
+    ];
+
+    await Promise.all(promises);
+};
+
 (async () => {
+    console.log("Worker Started");
     try {
-        await process();
+        warmup();
+        await Promise.all([process(), reprocess()]);
     } catch (err) {
         if (err instanceof Error) {
             parentPort?.postMessage({ error: err?.message });

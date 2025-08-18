@@ -1,6 +1,6 @@
 x-service-templates:
   api: &api
-    image: mkonita/rinha2025-node:1.0.3
+    image: mkonita/rinha2025-node:1.0.4
     networks:
       - internal
       - payment-processor
@@ -11,8 +11,8 @@ x-service-templates:
       KEYDB_HOST: 'keydb'
       QUEUE_SIZE: 200
       CONCURRENCY: 25
-      CONNECTIONS: 1
-      PIPELINING: 20
+      CONNECTIONS: 6
+      PIPELINING: 12
       PAYMENT_URL_DEFAULT: http://payment-processor-default:8080
       PAYMENT_URL_FALLBACK: http://payment-processor-fallback:8080
     deploy:
